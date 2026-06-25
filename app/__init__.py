@@ -38,6 +38,11 @@ def create_app(config_name=None):
     # migrate` sees an empty metadata and generates an empty migration even
     # though all our model files exist — they're just never loaded into
     # memory until something imports them.
+    #
+    # NOTE: using `from app import models` rather than `import app.models`.
+    # The latter re-resolves the bare name `app` at this point in the
+    # function, which collides with our local `app` variable (the Flask
+    # instance) and corrupts later references like `app.config`.
     with app.app_context():
         from app import models as _models  # noqa: F401
 
@@ -65,6 +70,18 @@ def create_app(config_name=None):
         app.config["DEBUG"] and os.environ.get("WERKZEUG_RUN_MAIN") != "true"
     )
     if not scheduler.running and not is_dev_reloader_parent:
+        from app.jobs.scheduled_jobs import check_low_stock, cleanup_abandoned_payments
+
+        scheduler.add_job(
+            func=lambda: check_low_stock(app),
+            trigger="interval", hours=1, id="check_low_stock",
+            replace_existing=True,
+        )
+        scheduler.add_job(
+            func=lambda: cleanup_abandoned_payments(app),
+            trigger="interval", minutes=15, id="cleanup_abandoned_payments",
+            replace_existing=True,
+        )
         scheduler.start()
 
     # ── Sentry error tracking (optional — only if SENTRY_DSN is set) ─────────

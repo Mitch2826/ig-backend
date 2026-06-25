@@ -29,6 +29,8 @@ from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.extensions import db
 from app.models import User, DeliveryAgent, Order, AuditLog
 from app.utils.decorators import staff_only, delivery_agent_only
+from app.services.email_service import send_agent_welcome_email
+from app.services.sms_service import send_agent_assignment_sms
 from app.blueprints.delivery.schemas import (
     AgentCreateSchema, AgentUpdateSchema, AgentResponseSchema, AgentCreatedResponseSchema,
     AssignOrderSchema, DeliveryOrderResponseSchema, MyDeliveryResponseSchema,
@@ -107,11 +109,14 @@ class AgentList(MethodView):
              {"name": data["name"], "email": data["email"]})
         db.session.commit()
 
+        # Email the credentials directly now that email_service is wired up.
+        # Still returned in the API response too as a fallback in case the
+        # email fails to send or lands in spam — admin can communicate it
+        # manually if needed.
+        send_agent_welcome_email(data["email"], data["name"], temp_password)
+
         result = agent.to_dict()
         result["temporaryPassword"] = temp_password
-        # TODO (Phase 5): email this password to the agent automatically
-        # instead of returning it in the API response, once email_service
-        # is wired up. For now admin must communicate it manually.
         return result
 
 
@@ -248,6 +253,9 @@ class AssignOrder(MethodView):
         _log(get_jwt_identity(), "order.assigned", "order", order.id,
              {"agentId": agent.id, "agentName": f"{agent.user.first_name} {agent.user.last_name}"})
         db.session.commit()
+
+        if agent.user.phone:
+            send_agent_assignment_sms(agent.user.phone, order.id)
 
         return {"message": f"Order assigned to {agent.user.first_name} {agent.user.last_name}"}
 

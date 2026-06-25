@@ -29,6 +29,8 @@ from app.models import Order, Payment
 from app.utils.decorators import customer_only
 from app.services.daraja_service import initiate_stk_push, parse_callback
 from app.services.inventory_service import confirm_reservation, release_reservation
+from app.services.email_service import send_order_status_update_email
+from app.services.sms_service import send_order_status_update_sms
 from app.blueprints.payments.schemas import (
     InitiateMpesaPaymentSchema, InitiateMpesaResponseSchema,
     PaymentResponseSchema, MessageSchema,
@@ -187,6 +189,13 @@ class MpesaCallback(MethodView):
             release_reservation(items)
 
         db.session.commit()
+
+        if parsed["success"]:
+            # Payment confirmed — let the customer know their order is
+            # now being prepared (status already moved to "processing" above)
+            send_order_status_update_email(order)
+            send_order_status_update_sms(order)
+
         return {"message": "Callback processed"}
 
 
