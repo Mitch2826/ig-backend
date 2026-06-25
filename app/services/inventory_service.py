@@ -39,18 +39,40 @@ class InsufficientStockError(Exception):
 def reserve_stock(items: List[Dict[str, Any]]) -> None:
     """
     items: [{"product": Product, "quantity": int}, ...]
-    Raises InsufficientStockError if any item can't be fully reserved.
-    Caller is responsible for committing the transaction afterward —
-    this function only stages the changes via db.session, it doesn't commit,
-    so it can be part of a larger atomic order-creation transaction.
+    Raises InsufficientStockError if ANY item can't be fully reserved.
+
+    Atomic by design: validates every item's availability FIRST, in a
+    separate pass, before reserving anything. This means a failure on
+    item 3 of a 4-item order leaves items 1 and 2 untouched too — the
+    caller doesn't need to rely on a database rollback to undo a partial
+    reservation, because no partial reservation ever happens here.
+
+    Caller is still responsible for committing the transaction afterward —
+    this function only stages the changes via db.session, it doesn't commit.
     """
+    # Pass 1: validate everything before touching anything.
+    # Aggregate quantities per product first, in case the same product
+    # appears more than once in the list (shouldn't happen from a normal
+    # cart, but defensive against it) — otherwise two lines for the same
+    # product could each individually pass the check against the same
+    # available_stock figure while together exceeding it.
+    quantities_by_product = {}
     for item in items:
         product: Product = item["product"]
         quantity: int = item["quantity"]
+        quantities_by_product[product.id] = (
+            quantities_by_product.get(product.id, (product, 0))[0],
+            quantities_by_product.get(product.id, (product, 0))[1] + quantity,
+        )
 
-        if product.available_stock < quantity:
-            raise InsufficientStockError(product.name, product.available_stock, quantity)
+    for product, total_quantity in quantities_by_product.values():
+        if product.available_stock < total_quantity:
+            raise InsufficientStockError(product.name, product.available_stock, total_quantity)
 
+    # Pass 2: all items confirmed available — now actually reserve
+    for item in items:
+        product: Product = item["product"]
+        quantity: int = item["quantity"]
         product.reserved_stock += quantity
 
 
