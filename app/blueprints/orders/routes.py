@@ -30,6 +30,8 @@ from app.models.order import VALID_TRANSITIONS
 from app.utils.decorators import staff_only, customer_only
 from app.services.settings_service import get_setting, get_feature_flag
 from app.services.inventory_service import reserve_stock, release_reservation, InsufficientStockError
+from app.services.email_service import send_order_confirmation_email, send_order_status_update_email
+from app.services.sms_service import send_order_confirmation_sms, send_order_status_update_sms
 from app.blueprints.orders.schemas import (
     PlaceOrderSchema, OrderResponseSchema, MyOrderResponseSchema, OrderListResponseSchema,
     OrderListQuerySchema, StatusUpdateSchema, CancellationRequestSchema,
@@ -122,6 +124,12 @@ class PlaceOrder(MethodView):
             ))
 
         db.session.commit()
+
+        # Fire-and-forget notifications — failures here never block the
+        # order itself (both functions catch their own exceptions and
+        # return False rather than raising)
+        send_order_confirmation_email(order)
+        send_order_confirmation_sms(order)
 
         # NOTE: payment is NOT processed here — that happens via the
         # Payments blueprint (Phase 3), which the frontend calls right
@@ -366,6 +374,13 @@ class AdminUpdateStatus(MethodView):
         order.status = new_status
         db.session.commit()
 
+        # Notify customer of status changes they actually care about
+        # (skip "processing" from cancellation_requested decline — that's
+        # not really news to them, they just stay in the queue)
+        if new_status in ("out_for_delivery", "delivered", "cancelled"):
+            send_order_status_update_email(order)
+            send_order_status_update_sms(order)
+
         return order.to_dict()
 
 
@@ -400,4 +415,3 @@ class AdminResolveReturn(MethodView):
 
         db.session.commit()
         return order.to_dict()
-    
