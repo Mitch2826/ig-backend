@@ -3,6 +3,11 @@ app/blueprints/admin/routes.py
 Admin/store_manager operations: dashboard metrics, inventory management,
 settings, customers, reports.
 
+PUBLIC (no auth):
+GET    /api/admin/settings/public           feature flags + safe store fields
+                                              (storefront uses this to decide
+                                              whether to render e.g. Flash Deals)
+
 GET    /api/admin/dashboard               metrics, recent orders, top products, low stock
 GET    /api/admin/inventory                full product list with stock status
 PATCH  /api/admin/inventory/<id>            update single product's stock
@@ -60,6 +65,43 @@ def _stock_status(product: Product) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# GET /api/admin/settings/public — PUBLIC, no auth required
+# Exposes only the feature flags + a few harmless display fields the
+# storefront needs (e.g. to decide whether to render the Flash Deals
+# section, or show "Free delivery over KES X" messaging). Deliberately
+# does NOT expose anything sensitive (mpesa paybill, support email, etc.)
+# — that full set stays staff-only via the existing SettingsGet route below.
+#
+# IMPORTANT: route ordering — flask-smorest/Flask matches the most
+# specific literal path before falling through to a parameterized one,
+# but since "/settings/public" and "/settings/hero" are both literal
+# children of "/settings", and neither is a prefix of the other, there's
+# no ambiguity here regardless of declaration order.
+# ─────────────────────────────────────────────────────────────────────────────
+@blp.route("/settings/public")
+class PublicSettings(MethodView):
+    def get(self):
+        settings = get_all_settings()
+        return {
+            "features": {
+                "salesAndDiscounts": settings["feature.sales_and_discounts"] == "true",
+                "flashDealsSection": settings["feature.flash_deals_section"] == "true",
+                "freeDelivery": settings["feature.free_delivery"] == "true",
+                "googleAuth": settings["feature.google_auth"] == "true",
+                "dynamicHero": settings["feature.dynamic_hero"] == "true",
+            },
+            "store": {
+                "deliveryFee": float(settings["store.delivery_fee"]),
+                "minOrderAmount": float(settings["store.min_order_amount"]),
+                "freeDeliveryThreshold": float(settings["store.free_delivery_threshold"]),
+                "storeName": settings["store.name"],
+                "storeAddress": settings["store.address"],
+                "storeHours": settings["store.hours"],
+            },
+        }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # GET /api/admin/dashboard
 # ─────────────────────────────────────────────────────────────────────────────
 @blp.route("/dashboard")
@@ -87,7 +129,6 @@ class Dashboard(MethodView):
             Order.query.order_by(Order.created_at.desc()).limit(5).all()
         )
 
-        # Top products by units sold across all completed orders
         top_products_query = (
             db.session.query(
                 Product.id, Product.name, Product.stock, Product.reserved_stock,
@@ -211,6 +252,7 @@ class InventoryBulkUpdate(MethodView):
 
 # ─────────────────────────────────────────────────────────────────────────────
 # GET /api/admin/settings — feature flags + store settings + hero slides
+# (full set, staff only — see PublicSettings above for the public subset)
 # ─────────────────────────────────────────────────────────────────────────────
 @blp.route("/settings")
 class SettingsGet(MethodView):
@@ -459,7 +501,6 @@ class Reports(MethodView):
         delivery_count = sum(1 for o in orders if o.fulfilment_type == "delivery")
         pickup_count = sum(1 for o in orders if o.fulfilment_type == "pickup")
 
-        # Daily revenue breakdown
         daily = {}
         for o in orders:
             day_key = o.created_at.date().isoformat()
@@ -473,7 +514,6 @@ class Reports(MethodView):
             for k, v in sorted(daily.items())
         ]
 
-        # Category breakdown
         category_revenue = {}
         for o in orders:
             for item in o.items:
@@ -489,7 +529,6 @@ class Reports(MethodView):
             for cat, rev in sorted(category_revenue.items(), key=lambda x: x[1], reverse=True)
         ]
 
-        # Top products
         product_sales = {}
         for o in orders:
             for item in o.items:
