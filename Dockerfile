@@ -37,4 +37,9 @@ EXPOSE 5000
 # --workers 2: reasonable for Render's free tier resource limits
 # --timeout 120: Daraja/iPay calls can take a few seconds; default 30s
 #                timeout could kill a request mid-payment-initiation
-CMD gunicorn --bind 0.0.0.0:${PORT:-5000} --workers 2 --timeout 120 "app:create_app()"
+# --access-logfile -: log every incoming request to stdout, so Render's
+#                     log viewer shows them (critical for debugging
+#                     webhooks like the Daraja callback, which otherwise
+#                     leave no trace if something goes wrong before
+#                     reaching our route handler)
+CMD gunicorn --bind 0.0.0.0:${PORT:-5000} --workers 2 --timeout 120 --access-logfile - --error-logfile - "app:create_app()"
